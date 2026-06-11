@@ -5,23 +5,38 @@ export type TtsStatus = "off" | "loading" | "ready" | "speaking" | "error";
 /** Minimal surface of the kokoro-js model we use (erases its strict voice
  *  union type so the voice id can come from settings). */
 interface KokoroModel {
-  generate(
-    text: string,
+  stream(
+    splitter: TextSplitter,
     options: { voice?: string },
-  ): Promise<{ toBlob(): Blob }>;
+  ): AsyncIterable<{ text: string; audio: { toBlob(): Blob } }>;
+}
+
+interface TextSplitter {
+  push(text: string): void;
+  close(): void;
 }
 
 const KOKORO_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 
+function hasWebGpu(): boolean {
+  return typeof navigator !== "undefined" && "gpu" in navigator;
+}
+
 /**
- * Lazy-loaded local TTS via kokoro-js (82M params, q8, WASM). The model is
- * only downloaded/initialized once TTS is enabled; audio is fully local.
+ * Local TTS via kokoro-js. Prefers WebGPU (fp32, ~10x faster than wasm on a
+ * discrete GPU) with wasm/q8 fallback. Sentences are synthesized as a stream
+ * and queued for gapless playback, so the first words play almost instantly
+ * instead of waiting for the whole clip.
  */
 export function useKokoroTts(enabled: boolean, voice: string) {
   const modelRef = useRef<KokoroModel | null>(null);
   const loadingRef = useRef<Promise<KokoroModel> | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const [status, setStatus] = useState<TtsStatus>("off");
+
+  // Playback queue state (refs: updated from async generators)
+  const queueRef = useRef<Blob[]>([]);
+  const playingRef = useRef<HTMLAudioElement | null>(null);
+  const generationRef = useRef(0);
 
   const ensureLoaded = useCallback(async (): Promise<KokoroModel> => {
     if (modelRef.current) return modelRef.current;
@@ -29,13 +44,23 @@ export function useKokoroTts(enabled: boolean, voice: string) {
       setStatus("loading");
       loadingRef.current = (async () => {
         const { KokoroTTS } = await import("kokoro-js");
-        const model = (await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
-          dtype: "q8",
-          device: "wasm",
-        })) as unknown as KokoroModel;
-        modelRef.current = model;
+        const useGpu = hasWebGpu();
+        let model: unknown;
+        try {
+          model = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+            dtype: useGpu ? "fp32" : "q8",
+            device: useGpu ? "webgpu" : "wasm",
+          });
+        } catch {
+          // WebGPU init can fail (driver/feature limits); fall back to wasm.
+          model = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
+            dtype: "q8",
+            device: "wasm",
+          });
+        }
+        modelRef.current = model as KokoroModel;
         setStatus("ready");
-        return model;
+        return modelRef.current;
       })().catch((e: unknown) => {
         loadingRef.current = null;
         setStatus("error");
@@ -55,12 +80,35 @@ export function useKokoroTts(enabled: boolean, voice: string) {
   }, [enabled, ensureLoaded]);
 
   const stop = useCallback(() => {
-    const el = audioRef.current;
+    generationRef.current += 1; // invalidate in-flight generation
+    queueRef.current = [];
+    const el = playingRef.current;
     if (el) {
       el.pause();
-      audioRef.current = null;
+      playingRef.current = null;
     }
     setStatus((s) => (s === "speaking" ? "ready" : s));
+  }, []);
+
+  /** Play queued blobs back-to-back; exits when queue drains. */
+  const pump = useCallback((generation: number) => {
+    if (generation !== generationRef.current) return;
+    const next = queueRef.current.shift();
+    if (!next) {
+      playingRef.current = null;
+      setStatus((s) => (s === "speaking" ? "ready" : s));
+      return;
+    }
+    const url = URL.createObjectURL(next);
+    const el = new Audio(url);
+    playingRef.current = el;
+    const done = () => {
+      URL.revokeObjectURL(url);
+      pump(generation);
+    };
+    el.onended = done;
+    el.onerror = done;
+    void el.play().catch(done);
   }, []);
 
   const speak = useCallback(
@@ -68,28 +116,33 @@ export function useKokoroTts(enabled: boolean, voice: string) {
       if (!enabled || !text.trim()) return;
       try {
         const model = await ensureLoaded();
-        const audio = await model.generate(text, { voice });
         stop();
-        const url = URL.createObjectURL(audio.toBlob());
-        const el = new Audio(url);
-        audioRef.current = el;
+        const generation = generationRef.current;
         setStatus("speaking");
-        const finish = () => {
-          URL.revokeObjectURL(url);
-          if (audioRef.current === el) {
-            audioRef.current = null;
+
+        const { TextSplitterStream } = await import("kokoro-js");
+        const splitter = new TextSplitterStream();
+        const stream = model.stream(splitter, { voice });
+        splitter.push(text);
+        splitter.close();
+
+        let started = false;
+        for await (const { audio } of stream) {
+          if (generation !== generationRef.current) return; // superseded
+          queueRef.current.push(audio.toBlob());
+          if (!started) {
+            started = true;
+            pump(generation);
+          } else if (!playingRef.current) {
+            pump(generation); // queue drained while synthesizing; resume
           }
-          setStatus((s) => (s === "speaking" ? "ready" : s));
-        };
-        el.onended = finish;
-        el.onerror = finish;
-        await el.play();
+        }
       } catch (e) {
         console.error("Kokoro TTS failed:", e);
         setStatus("error");
       }
     },
-    [enabled, voice, ensureLoaded, stop],
+    [enabled, voice, ensureLoaded, stop, pump],
   );
 
   return { status, speak, stop };

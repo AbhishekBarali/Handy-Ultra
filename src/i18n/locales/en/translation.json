@@ -208,6 +208,10 @@
       "pushToTalk": {
         "label": "Push To Talk",
         "description": "Hold to record, release to stop"
+      },
+      "tapToLock": {
+        "label": "Tap to Lock",
+        "description": "Quickly tap the shortcut to keep recording hands-free until you tap it again. Holding still works as normal push-to-talk."
       }
     },
     "models": {
@@ -576,19 +580,47 @@
       "vision": {
         "title": "Screen Vision",
         "enableLabel": "Allow screenshots",
-        "enableDescription": "When enabled, the Assistant + Screen shortcut and the panel's camera button capture your screen and send it with your question. Disable to guarantee nothing is ever captured."
+        "enableDescription": "The Assistant + Screen shortcut and the panel's camera button capture your screen and send it with your question. Saying things like \"what's on my screen\" or \"look at this error\" also auto-attaches a capture. Requires a vision-capable model (e.g. gpt-4o-mini, gemini-flash). Disable to guarantee nothing is ever captured."
       },
       "tts": {
         "title": "Voice Output (TTS)",
         "enableLabel": "Speak a short summary",
-        "enableDescription": "After each answer, a tiny extra request asks the model for a one-sentence takeaway, which is spoken aloud with Kokoro — a local, free TTS model (~90 MB, downloaded on first use). The full answer is never read out.",
+        "enableDescription": "After each answer, a tiny extra request asks the model for a brief takeaway, which is spoken aloud. The full answer is never read out.",
+        "engineLabel": "TTS engine",
+        "engineDescription": "Kokoro runs locally and free (uses your GPU via WebGPU). The OpenAI-compatible engine works with OpenAI, Azure OpenAI, Groq, or any local server exposing /audio/speech. ElevenLabs uses your ElevenLabs API key.",
+        "engines": {
+          "kokoro": "Kokoro (local, free)",
+          "openai": "OpenAI-compatible (OpenAI / Azure / custom)",
+          "elevenlabs": "ElevenLabs"
+        },
         "voiceLabel": "Voice",
         "voiceDescription": "Kokoro voice used for the spoken summary.",
+        "baseUrlLabel": "TTS Base URL",
+        "baseUrlDescription": "OpenAI-compatible endpoint base. For Azure OpenAI use https://{resource}.openai.azure.com/openai/v1 (or your cognitiveservices domain) with a TTS deployment as model.",
+        "apiKeyLabel": "TTS API Key",
+        "apiKeyDescription": "API key for the TTS endpoint (separate from the assistant LLM key).",
+        "modelLabel": "TTS Model",
+        "modelDescription": "Model or deployment name, e.g. gpt-4o-mini-tts (OpenAI/Azure) or eleven_flash_v2_5 (ElevenLabs).",
+        "remoteVoiceLabel": "Voice name",
+        "remoteVoiceDescription": "Voice for OpenAI-compatible TTS, e.g. alloy, echo, nova, shimmer.",
+        "elevenVoiceLabel": "Voice ID",
+        "elevenVoiceDescription": "ElevenLabs voice ID (from the Voices tab in their dashboard).",
         "promptLabel": "Summary Prompt",
-        "promptDescription": "Instructions for generating the short spoken summary of each answer."
+        "promptDescription": "Instructions for generating the brief spoken summary of each answer."
       },
       "appearance": {
         "title": "Panel Appearance",
+        "previewLabel": "Preview",
+        "previewDescription": "Live preview of your accent, text size, and opacity choices.",
+        "previewUser": "Hey, what can you do?",
+        "previewAssistant": "Lots! Ask me anything — I can even look at your screen.",
+        "sizeLabel": "Panel size",
+        "sizeDescription": "Size of the floating panel window. You can also collapse it to a tiny pill from the panel header.",
+        "sizes": {
+          "compact": "Compact",
+          "standard": "Standard",
+          "large": "Large"
+        },
         "accentLabel": "Accent color",
         "accentDescription": "Color of your message bubbles, buttons, and highlights in the assistant panel.",
         "accents": {
@@ -697,6 +729,13 @@
       "enable": "Enable voice summaries",
       "disable": "Disable voice summaries",
       "loading": "Loading Kokoro voice model..."
+    },
+    "pill": {
+      "talk": "Click to talk",
+      "stop": "Stop and send",
+      "idle": "Assistant",
+      "expand": "Expand panel",
+      "collapse": "Collapse to pill"
     },
     "status": {
       "listening": "Listening...",

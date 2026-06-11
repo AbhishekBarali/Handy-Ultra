@@ -16,15 +16,53 @@ use tauri::{AppHandle, Emitter, Manager, WebviewWindowBuilder};
 use tauri_plugin_store::StoreExt;
 
 pub const PANEL_LABEL: &str = "assistant_panel";
-const PANEL_WIDTH: f64 = 420.0;
-const PANEL_HEIGHT: f64 = 560.0;
 const PANEL_MARGIN: f64 = 24.0;
 const PANEL_POSITION_KEY: &str = "assistant_panel_position";
+
+/// Collapsed "pill" mode dimensions (small floating button bar).
+const PILL_WIDTH: f64 = 232.0;
+const PILL_HEIGHT: f64 = 64.0;
+
+/// Logical size for each panel size preset.
+pub fn panel_size_for(preset: &str) -> (f64, f64) {
+    match preset {
+        "compact" => (340.0, 440.0),
+        "large" => (560.0, 720.0),
+        _ => (420.0, 560.0),
+    }
+}
+
+/// Whether the panel is currently collapsed to the pill.
+static PILL_MODE: AtomicBool = AtomicBool::new(false);
 
 /// Appended to the stored user message when a screenshot was sent with it.
 /// The panel strips it for display and shows a chip instead; on later turns
 /// it tells the model a screenshot accompanied that message.
 pub const SCREENSHOT_MARKER: &str = "[screenshot attached]";
+
+/// Phrases that signal the user is asking about what's on their screen.
+/// When the screenshot toggle is on, these auto-attach a capture even on the
+/// normal assistant hotkey.
+pub fn wants_screen_context(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    const PATTERNS: [&str; 14] = [
+        "my screen",
+        "the screen",
+        "on screen",
+        "my display",
+        "the display",
+        "my monitor",
+        "what do you see",
+        "what are you seeing",
+        "can you see",
+        "what am i looking at",
+        "look at this",
+        "looking at",
+        "this error",
+        "this page",
+    ];
+    PATTERNS.iter().any(|p| lower.contains(p))
+}
 
 /// In-memory conversation history, managed as Tauri state.
 pub struct AssistantConversation {
@@ -134,6 +172,8 @@ fn save_position(app: &AppHandle) {
 
 /// Default position: bottom-right of the primary monitor (logical coords).
 fn default_position(app: &AppHandle) -> (f64, f64) {
+    let settings = get_settings(app);
+    let (panel_w, panel_h) = panel_size_for(&settings.assistant_panel_size);
     if let Ok(Some(monitor)) = app.primary_monitor() {
         let scale = monitor.scale_factor();
         let mw = monitor.size().width as f64 / scale;
@@ -141,8 +181,8 @@ fn default_position(app: &AppHandle) -> (f64, f64) {
         let mx = monitor.position().x as f64 / scale;
         let my = monitor.position().y as f64 / scale;
         (
-            mx + mw - PANEL_WIDTH - PANEL_MARGIN,
-            my + mh - PANEL_HEIGHT - PANEL_MARGIN - 40.0, // keep clear of taskbar
+            mx + mw - panel_w - PANEL_MARGIN,
+            my + mh - panel_h - PANEL_MARGIN - 40.0, // keep clear of taskbar
         )
     } else {
         (100.0, 100.0)
@@ -152,6 +192,8 @@ fn default_position(app: &AppHandle) -> (f64, f64) {
 /// Create the assistant panel window, hidden by default. Called once at setup.
 pub fn create_assistant_panel(app: &AppHandle) {
     let (x, y) = saved_position(app).unwrap_or_else(|| default_position(app));
+    let settings = get_settings(app);
+    let (panel_w, panel_h) = panel_size_for(&settings.assistant_panel_size);
 
     let mut builder = WebviewWindowBuilder::new(
         app,
@@ -159,8 +201,8 @@ pub fn create_assistant_panel(app: &AppHandle) {
         tauri::WebviewUrl::App("src/assistant/index.html".into()),
     )
     .title("Assistant")
-    .inner_size(PANEL_WIDTH, PANEL_HEIGHT)
-    .min_inner_size(320.0, 280.0)
+    .inner_size(panel_w, panel_h)
+    .min_inner_size(PILL_WIDTH, PILL_HEIGHT)
     .position(x, y)
     .resizable(true)
     .maximizable(false)
@@ -214,6 +256,33 @@ pub fn toggle_assistant_panel(app: &AppHandle) {
             Ok(true) => hide_assistant_panel(app),
             _ => show_assistant_panel(app),
         }
+    }
+}
+
+/// Apply the configured size preset to the panel window (no-op in pill mode).
+pub fn apply_panel_size(app: &AppHandle) {
+    if PILL_MODE.load(Ordering::SeqCst) {
+        return;
+    }
+    if let Some(window) = app.get_webview_window(PANEL_LABEL) {
+        let settings = get_settings(app);
+        let (w, h) = panel_size_for(&settings.assistant_panel_size);
+        let _ = window.set_size(tauri::LogicalSize::new(w, h));
+    }
+}
+
+/// Collapse the panel to a small pill, or restore it to its configured size.
+pub fn set_panel_collapsed(app: &AppHandle, collapsed: bool) {
+    PILL_MODE.store(collapsed, Ordering::SeqCst);
+    if let Some(window) = app.get_webview_window(PANEL_LABEL) {
+        if collapsed {
+            let _ = window.set_size(tauri::LogicalSize::new(PILL_WIDTH, PILL_HEIGHT));
+        } else {
+            let settings = get_settings(app);
+            let (w, h) = panel_size_for(&settings.assistant_panel_size);
+            let _ = window.set_size(tauri::LogicalSize::new(w, h));
+        }
+        let _ = app.emit("assistant-collapsed", collapsed);
     }
 }
 
@@ -349,16 +418,11 @@ pub async fn run_assistant_turn(app: AppHandle, user_text: String, screenshot: O
     );
 
     let app_for_tokens = app.clone();
-    let result = llm_client::send_chat_stream(
-        &provider,
-        api_key.clone(),
-        &model,
-        messages,
-        move |token| {
+    let result =
+        llm_client::send_chat_stream(&provider, api_key.clone(), &model, messages, move |token| {
             let _ = app_for_tokens.emit("assistant-token", token.to_string());
-        },
-    )
-    .await;
+        })
+        .await;
 
     match result {
         Ok(full_text) => {
@@ -378,15 +442,23 @@ pub async fn run_assistant_turn(app: AppHandle, user_text: String, screenshot: O
         }
         Err(e) => {
             error!("Assistant request failed: {}", e);
-            let _ = app.emit("assistant-error", e);
+            let message = if screenshot.is_some() {
+                format!(
+                    "{}\n\nNote: a screenshot was attached — make sure the selected model supports image input (e.g. gpt-4o-mini, gpt-4.1-mini, gemini-flash, claude, llava).",
+                    e
+                )
+            } else {
+                e
+            };
+            let _ = app.emit("assistant-error", message);
         }
     }
 
     emit_state(&app, "idle");
 }
 
-/// Ask the model for an ultra-short spoken summary of its reply and emit it
-/// as `assistant-tts` for the panel's TTS engine. Fire-and-forget.
+/// Ask the model for a brief spoken summary of its reply and route it to the
+/// configured TTS engine. Fire-and-forget.
 fn spawn_tts_summary(
     app: &AppHandle,
     settings: &crate::settings::AppSettings,
@@ -399,6 +471,7 @@ fn spawn_tts_summary(
     let provider = provider.clone();
     let model = model.to_string();
     let tts_prompt = settings.assistant_tts_prompt.clone();
+    let settings = settings.clone();
 
     tauri::async_runtime::spawn(async move {
         match llm_client::send_chat_completion_with_schema(
@@ -414,8 +487,17 @@ fn spawn_tts_summary(
         .await
         {
             Ok(Some(summary)) if !summary.trim().is_empty() => {
-                debug!("TTS summary: {}", summary.trim());
-                let _ = app.emit("assistant-tts", summary.trim().to_string());
+                let summary = summary.trim().to_string();
+                debug!(
+                    "TTS summary ({}): {}",
+                    settings.assistant_tts_engine, summary
+                );
+                if settings.assistant_tts_engine == "kokoro" {
+                    // Local engine lives in the panel webview (kokoro-js).
+                    let _ = app.emit("assistant-tts", summary);
+                } else {
+                    crate::tts::speak_remote(&app, &settings, summary).await;
+                }
             }
             Ok(_) => debug!("TTS summary request returned no content"),
             Err(e) => debug!("TTS summary request failed: {}", e),

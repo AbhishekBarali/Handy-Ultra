@@ -20,6 +20,7 @@ mod signal_handle;
 mod transcription_coordinator;
 mod tray;
 mod tray_i18n;
+mod tts;
 mod utils;
 
 pub use cli::CliArgs;
@@ -324,8 +325,7 @@ pub fn run(cli_args: CliArgs) {
     // (WebView2 reads this env var at creation time).
     #[cfg(target_os = "windows")]
     {
-        let mut args = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS")
-            .unwrap_or_default();
+        let mut args = std::env::var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").unwrap_or_default();
         if !args.contains("--autoplay-policy") {
             if !args.is_empty() {
                 args.push(' ');
@@ -458,6 +458,16 @@ pub fn run(cli_args: CliArgs) {
             commands::assistant::set_assistant_panel_opacity,
             commands::assistant::set_assistant_font_size,
             commands::assistant::set_assistant_accent,
+            commands::assistant::set_assistant_tts_engine,
+            commands::assistant::set_assistant_tts_base_url,
+            commands::assistant::set_assistant_tts_api_key,
+            commands::assistant::set_assistant_tts_model,
+            commands::assistant::set_assistant_tts_remote_voice,
+            commands::assistant::set_assistant_panel_size,
+            commands::assistant::set_assistant_panel_collapsed,
+            commands::assistant::set_tap_to_lock,
+            commands::assistant::assistant_toggle_voice,
+            commands::assistant::assistant_speak,
             helpers::clamshell::is_laptop,
         ])
         .events(collect_events![managers::history::HistoryUpdatePayload,]);

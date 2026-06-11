@@ -82,3 +82,20 @@ pub fn capture_screen_data_url() -> Result<String, String> {
 
     Ok(format!("data:image/jpeg;base64,{}", encoded))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_works_on_this_machine() {
+        let result = capture_screen_data_url();
+        match result {
+            Ok(url) => {
+                assert!(url.starts_with("data:image/jpeg;base64,"));
+                println!("capture OK: {} KB data url", url.len() / 1024);
+            }
+            Err(e) => panic!("capture failed: {}", e),
+        }
+    }
+}

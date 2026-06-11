@@ -772,28 +772,51 @@ impl ShortcutAction for AssistantAction {
                 }
             };
 
-            // Vision binding: grab the screen now ("at the last moment"),
-            // before transcription, so the model sees what the user saw
-            // when they finished speaking.
-            let screenshot = if binding_id == "assistant_vision"
-                && crate::settings::get_settings(&ah).assistant_screenshot_enabled
-            {
-                match crate::screenshot::capture_screen_data_url() {
-                    Ok(data_url) => Some(data_url),
-                    Err(e) => {
-                        error!("Screen capture failed: {}", e);
-                        let _ = ah.emit("assistant-error", format!("Screen capture failed: {}", e));
-                        None
-                    }
-                }
-            } else {
-                None
-            };
-
+            // Vision: the dedicated vision binding always captures; the
+            // normal binding captures when the question clearly refers to
+            // the screen ("what's on my display..."). Capture happens after
+            // transcription so we know the intent — the screen content is
+            // unchanged in those ~150ms.
             match tm.transcribe(samples) {
                 Ok(transcription) => {
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);
+
+                    let settings = crate::settings::get_settings(&ah);
+                    let wants_screen = binding_id == "assistant_vision"
+                        || crate::assistant::wants_screen_context(&transcription);
+                    let screenshot = if wants_screen && settings.assistant_screenshot_enabled {
+                        let captured = tauri::async_runtime::spawn_blocking(
+                            crate::screenshot::capture_screen_data_url,
+                        )
+                        .await;
+                        match captured {
+                            Ok(Ok(data_url)) => Some(data_url),
+                            Ok(Err(e)) => {
+                                // Don't silently send a text-only request when
+                                // the user asked about their screen.
+                                error!("Screen capture failed: {}", e);
+                                let _ = ah.emit(
+                                    "assistant-error",
+                                    format!("Screen capture failed: {}", e),
+                                );
+                                crate::assistant::emit_state(&ah, "idle");
+                                return;
+                            }
+                            Err(e) => {
+                                error!("Screen capture task failed: {}", e);
+                                let _ = ah.emit(
+                                    "assistant-error",
+                                    format!("Screen capture failed: {}", e),
+                                );
+                                crate::assistant::emit_state(&ah, "idle");
+                                return;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
                     crate::assistant::run_assistant_turn(ah.clone(), transcription, screenshot)
                         .await;
                 }

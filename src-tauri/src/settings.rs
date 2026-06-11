@@ -333,6 +333,20 @@ impl std::ops::DerefMut for SecretMap {
     }
 }
 
+#[derive(Clone, Default, Serialize, Deserialize, Type)]
+#[serde(transparent)]
+pub struct SecretString(pub String);
+
+impl fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.0.is_empty() {
+            f.write_str("\"\"")
+        } else {
+            f.write_str("\"[REDACTED]\"")
+        }
+    }
+}
+
 /* still handy for composing the initial JSON in the store ------------- */
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct AppSettings {
@@ -440,8 +454,18 @@ pub struct AppSettings {
     pub assistant_screenshot_enabled: bool,
     #[serde(default)]
     pub assistant_tts_enabled: bool,
+    #[serde(default = "default_assistant_tts_engine")]
+    pub assistant_tts_engine: String,
     #[serde(default = "default_assistant_tts_voice")]
     pub assistant_tts_voice: String,
+    #[serde(default = "default_assistant_tts_base_url")]
+    pub assistant_tts_base_url: String,
+    #[serde(default)]
+    pub assistant_tts_api_key: SecretString,
+    #[serde(default = "default_assistant_tts_model")]
+    pub assistant_tts_model: String,
+    #[serde(default = "default_assistant_tts_remote_voice")]
+    pub assistant_tts_remote_voice: String,
     #[serde(default = "default_assistant_tts_prompt")]
     pub assistant_tts_prompt: String,
     #[serde(default = "default_assistant_panel_opacity")]
@@ -450,6 +474,10 @@ pub struct AppSettings {
     pub assistant_font_size: String,
     #[serde(default = "default_assistant_accent")]
     pub assistant_accent: String,
+    #[serde(default = "default_assistant_panel_size")]
+    pub assistant_panel_size: String,
+    #[serde(default = "default_tap_to_lock")]
+    pub tap_to_lock: bool,
 }
 
 fn default_model() -> String {
@@ -619,6 +647,16 @@ fn default_post_process_providers() -> Vec<PostProcessProvider> {
         supports_structured_output: true,
     });
 
+    // Local OpenAI-compatible servers (Ollama, LM Studio, llama.cpp, vLLM)
+    providers.push(PostProcessProvider {
+        id: "local".to_string(),
+        label: "Local (Ollama / LM Studio)".to_string(),
+        base_url: "http://localhost:11434/v1".to_string(),
+        allow_base_url_edit: true,
+        models_endpoint: Some("/models".to_string()),
+        supports_structured_output: false,
+    });
+
     // Custom provider always comes last
     providers.push(PostProcessProvider {
         id: "custom".to_string(),
@@ -692,10 +730,34 @@ fn default_assistant_tts_voice() -> String {
     "af_heart".to_string()
 }
 
+fn default_assistant_tts_engine() -> String {
+    "kokoro".to_string()
+}
+
+fn default_assistant_tts_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
+}
+
+fn default_assistant_tts_model() -> String {
+    "gpt-4o-mini-tts".to_string()
+}
+
+fn default_assistant_tts_remote_voice() -> String {
+    "alloy".to_string()
+}
+
+fn default_assistant_panel_size() -> String {
+    "standard".to_string()
+}
+
+fn default_tap_to_lock() -> bool {
+    true
+}
+
 /// System prompt for the spoken summary: instead of reading the whole answer
-/// aloud, the model produces one short conversational sentence.
+/// aloud, the model produces a brief conversational recap.
 fn default_assistant_tts_prompt() -> String {
-    "The user just received the following assistant answer in a chat panel. Reply with ONE short spoken sentence (under 20 words) summarizing the key takeaway, as if briefly telling the user out loud. Plain conversational text only: no markdown, no lists, no code.".to_string()
+    "The user just received the following assistant answer in a chat panel. Speak a brief recap: one to three short conversational sentences (roughly 25-60 words) covering the key points or the direct answer. Talk naturally, as if quickly telling a friend. Plain text only: no markdown, no lists, no headings, no code.".to_string()
 }
 
 fn default_assistant_panel_opacity() -> f64 {
@@ -726,6 +788,32 @@ fn ensure_assistant_defaults(settings: &mut AppSettings) -> bool {
     }
     if settings.assistant_tts_voice.trim().is_empty() {
         settings.assistant_tts_voice = default_assistant_tts_voice();
+        changed = true;
+    }
+    if !matches!(
+        settings.assistant_tts_engine.as_str(),
+        "kokoro" | "openai" | "elevenlabs"
+    ) {
+        settings.assistant_tts_engine = default_assistant_tts_engine();
+        changed = true;
+    }
+    if settings.assistant_tts_base_url.trim().is_empty() {
+        settings.assistant_tts_base_url = default_assistant_tts_base_url();
+        changed = true;
+    }
+    if settings.assistant_tts_model.trim().is_empty() {
+        settings.assistant_tts_model = default_assistant_tts_model();
+        changed = true;
+    }
+    if settings.assistant_tts_remote_voice.trim().is_empty() {
+        settings.assistant_tts_remote_voice = default_assistant_tts_remote_voice();
+        changed = true;
+    }
+    if !matches!(
+        settings.assistant_panel_size.as_str(),
+        "compact" | "standard" | "large"
+    ) {
+        settings.assistant_panel_size = default_assistant_panel_size();
         changed = true;
     }
     if settings.assistant_tts_prompt.trim().is_empty() {
@@ -973,11 +1061,18 @@ pub fn get_default_settings() -> AppSettings {
         assistant_system_prompt: default_assistant_system_prompt(),
         assistant_screenshot_enabled: default_assistant_screenshot_enabled(),
         assistant_tts_enabled: false,
+        assistant_tts_engine: default_assistant_tts_engine(),
         assistant_tts_voice: default_assistant_tts_voice(),
+        assistant_tts_base_url: default_assistant_tts_base_url(),
+        assistant_tts_api_key: SecretString::default(),
+        assistant_tts_model: default_assistant_tts_model(),
+        assistant_tts_remote_voice: default_assistant_tts_remote_voice(),
         assistant_tts_prompt: default_assistant_tts_prompt(),
         assistant_panel_opacity: default_assistant_panel_opacity(),
         assistant_font_size: default_assistant_font_size(),
         assistant_accent: default_assistant_accent(),
+        assistant_panel_size: default_assistant_panel_size(),
+        tap_to_lock: default_tap_to_lock(),
     }
 }
 

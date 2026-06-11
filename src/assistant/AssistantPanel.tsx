@@ -1,12 +1,17 @@
 import { listen } from "@tauri-apps/api/event";
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import ReactMarkdown from "react-markdown";
 import {
   ArrowUp,
   Camera,
   Check,
   Copy,
   Eraser,
+  Maximize2,
+  Mic,
+  Minimize2,
+  Square,
   Volume2,
   VolumeX,
   X,
@@ -84,6 +89,7 @@ const AssistantPanel: React.FC = () => {
   const [state, setState] = useState<AssistantState>("idle");
   const [input, setInput] = useState("");
   const [attachScreen, setAttachScreen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
@@ -199,6 +205,12 @@ const AssistantPanel: React.FC = () => {
       );
 
       track(
+        await listen<boolean>("assistant-collapsed", (e) => {
+          setCollapsed(e.payload);
+        }),
+      );
+
+      track(
         await listen("assistant-settings-changed", () => {
           void refreshSettings();
         }),
@@ -254,6 +266,15 @@ const AssistantPanel: React.FC = () => {
     await refreshSettings();
   }, [ttsEnabled, tts, refreshSettings]);
 
+  const toggleVoice = useCallback(async () => {
+    await commands.assistantToggleVoice();
+  }, []);
+
+  const collapse = useCallback(async (value: boolean) => {
+    await commands.setAssistantPanelCollapsed(value);
+    setCollapsed(value);
+  }, []);
+
   const showTypingDots = state === "thinking" && stream === "";
 
   const ttsTitle =
@@ -262,6 +283,36 @@ const AssistantPanel: React.FC = () => {
       : ttsEnabled
         ? t("assistant.tts.disable")
         : t("assistant.tts.enable");
+
+  if (collapsed) {
+    return (
+      <div className="assistant-pill" data-tauri-drag-region>
+        <button
+          className={`pill-mic${state === "listening" ? " recording" : ""}${
+            state === "transcribing" || state === "thinking" ? " working" : ""
+          }`}
+          onClick={toggleVoice}
+          title={
+            state === "listening"
+              ? t("assistant.pill.stop")
+              : t("assistant.pill.talk")
+          }
+        >
+          {state === "listening" ? <Square size={16} /> : <Mic size={18} />}
+        </button>
+        <span className="pill-status" data-tauri-drag-region>
+          {busy ? t(`assistant.status.${state}`) : t("assistant.pill.idle")}
+        </span>
+        <button
+          className="assistant-icon-button"
+          onClick={() => collapse(false)}
+          title={t("assistant.pill.expand")}
+        >
+          <Maximize2 size={14} />
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="assistant-panel">
@@ -296,6 +347,13 @@ const AssistantPanel: React.FC = () => {
             <Eraser size={14} />
           </button>
           <button
+            className="assistant-icon-button"
+            onClick={() => collapse(true)}
+            title={t("assistant.pill.collapse")}
+          >
+            <Minimize2 size={14} />
+          </button>
+          <button
             className="assistant-icon-button close"
             onClick={hidePanel}
             title={t("assistant.hide")}
@@ -313,7 +371,13 @@ const AssistantPanel: React.FC = () => {
         )}
         {history.map((message, i) => (
           <div key={i} className={`assistant-message ${message.role}`}>
-            <div className="assistant-message-content">{message.content}</div>
+            <div className="assistant-message-content">
+              {message.role === "assistant" ? (
+                <ReactMarkdown>{message.content}</ReactMarkdown>
+              ) : (
+                message.content
+              )}
+            </div>
             {message.screenshot && (
               <span className="screen-chip">
                 <Camera size={11} />
@@ -330,7 +394,9 @@ const AssistantPanel: React.FC = () => {
         ))}
         {stream !== "" && (
           <div className="assistant-message assistant">
-            <div className="assistant-message-content">{stream}</div>
+            <div className="assistant-message-content">
+              <ReactMarkdown>{stream}</ReactMarkdown>
+            </div>
           </div>
         )}
         {(state === "listening" || state === "transcribing") && (

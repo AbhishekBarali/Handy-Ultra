@@ -19,8 +19,7 @@ pub async fn assistant_send_text(app: AppHandle, text: String) -> Result<(), Str
 pub async fn assistant_send_text_with_screen(app: AppHandle, text: String) -> Result<(), String> {
     let settings = get_settings(&app);
     let screenshot = if settings.assistant_screenshot_enabled {
-        match tauri::async_runtime::spawn_blocking(crate::screenshot::capture_screen_data_url)
-            .await
+        match tauri::async_runtime::spawn_blocking(crate::screenshot::capture_screen_data_url).await
         {
             Ok(Ok(url)) => Some(url),
             Ok(Err(e)) => {
@@ -196,5 +195,115 @@ pub fn set_assistant_accent(app: AppHandle, accent: String) -> Result<(), String
     settings.assistant_accent = accent;
     write_settings(&app, settings);
     emit_settings_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_assistant_tts_engine(app: AppHandle, engine: String) -> Result<(), String> {
+    if !matches!(engine.as_str(), "kokoro" | "openai" | "elevenlabs") {
+        return Err(format!("Unknown TTS engine: {}", engine));
+    }
+    let mut settings = get_settings(&app);
+    settings.assistant_tts_engine = engine;
+    write_settings(&app, settings);
+    emit_settings_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_assistant_tts_base_url(app: AppHandle, base_url: String) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.assistant_tts_base_url = base_url;
+    write_settings(&app, settings);
+    emit_settings_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_assistant_tts_api_key(app: AppHandle, api_key: String) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.assistant_tts_api_key = crate::settings::SecretString(api_key);
+    write_settings(&app, settings);
+    emit_settings_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_assistant_tts_model(app: AppHandle, model: String) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.assistant_tts_model = model;
+    write_settings(&app, settings);
+    emit_settings_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_assistant_tts_remote_voice(app: AppHandle, voice: String) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.assistant_tts_remote_voice = voice;
+    write_settings(&app, settings);
+    emit_settings_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_assistant_panel_size(app: AppHandle, size: String) -> Result<(), String> {
+    if !matches!(size.as_str(), "compact" | "standard" | "large") {
+        return Err(format!("Unknown panel size: {}", size));
+    }
+    let mut settings = get_settings(&app);
+    settings.assistant_panel_size = size;
+    write_settings(&app, settings);
+    assistant::apply_panel_size(&app);
+    emit_settings_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_assistant_panel_collapsed(app: AppHandle, collapsed: bool) -> Result<(), String> {
+    assistant::set_panel_collapsed(&app, collapsed);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_tap_to_lock(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    settings.tap_to_lock = enabled;
+    write_settings(&app, settings);
+    Ok(())
+}
+
+/// Start/stop assistant voice recording programmatically (pill mic button).
+/// Uses the coordinator's toggle semantics: first call starts, second stops.
+#[tauri::command]
+#[specta::specta]
+pub fn assistant_toggle_voice(app: AppHandle) -> Result<(), String> {
+    let coordinator = app
+        .try_state::<crate::TranscriptionCoordinator>()
+        .ok_or_else(|| "Coordinator not initialized".to_string())?;
+    coordinator.send_input("assistant", "pill", true, false, false);
+    Ok(())
+}
+
+/// Speak arbitrary text with the configured remote TTS engine (used by the
+/// panel to test or replay summaries; the kokoro engine plays in-webview).
+#[tauri::command]
+#[specta::specta]
+pub async fn assistant_speak(app: AppHandle, text: String) -> Result<(), String> {
+    let settings = get_settings(&app);
+    if settings.assistant_tts_engine == "kokoro" {
+        use tauri::Emitter;
+        let _ = app.emit("assistant-tts", text);
+    } else {
+        crate::tts::speak_remote(&app, &settings, text).await;
+    }
     Ok(())
 }

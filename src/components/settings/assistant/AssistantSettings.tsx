@@ -24,6 +24,70 @@ const KOKORO_VOICES = [
   { value: "bm_george", label: "George (UK male)" },
 ];
 
+const ACCENTS: Record<string, [string, string]> = {
+  violet: ["#6366f1", "#8b5cf6"],
+  blue: ["#2563eb", "#06b6d4"],
+  emerald: ["#059669", "#34d399"],
+  rose: ["#e11d48", "#ec4899"],
+  amber: ["#d97706", "#f59e0b"],
+  mono: ["#52525b", "#71717a"],
+};
+
+const FONT_SIZES: Record<string, string> = {
+  small: "12px",
+  medium: "13px",
+  large: "14.5px",
+};
+
+/** Live preview of the assistant panel using the current appearance
+ *  settings — mirrors the bubble/input styling of the real panel. */
+const PanelPreview: React.FC<{
+  accent: string;
+  fontSize: string;
+  opacity: number;
+}> = ({ accent, fontSize, opacity }) => {
+  const { t } = useTranslation();
+  const [from, to] = ACCENTS[accent] ?? ACCENTS.violet;
+  const fs = FONT_SIZES[fontSize] ?? FONT_SIZES.medium;
+
+  return (
+    <div
+      className="rounded-2xl border border-mid-gray/20 p-3 flex flex-col gap-2"
+      style={{ opacity: Math.max(opacity, 0.5) }}
+    >
+      <div
+        className="self-end max-w-[75%] rounded-2xl rounded-br-md px-3 py-1.5 text-white"
+        style={{
+          background: `linear-gradient(135deg, ${from}, ${to})`,
+          fontSize: fs,
+        }}
+      >
+        {t("settings.assistant.appearance.previewUser")}
+      </div>
+      <div
+        className="self-start max-w-[75%] rounded-2xl rounded-bl-md px-3 py-1.5 bg-mid-gray/10 border border-mid-gray/20"
+        style={{ fontSize: fs }}
+      >
+        {t("settings.assistant.appearance.previewAssistant")}
+      </div>
+      <div className="flex items-center gap-2 mt-1">
+        <div
+          className="flex-1 h-8 rounded-xl border border-mid-gray/30 px-3 flex items-center text-mid-gray"
+          style={{ fontSize: fs }}
+        >
+          {t("assistant.inputPlaceholder")}
+        </div>
+        <div
+          className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm"
+          style={{ background: `linear-gradient(135deg, ${from}, ${to})` }}
+        >
+          ↑
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export const AssistantSettings: React.FC = () => {
   const { t } = useTranslation();
   const { settings, refreshSettings, updatePostProcessApiKey } = useSettings();
@@ -37,6 +101,10 @@ export const AssistantSettings: React.FC = () => {
   const [ttsPrompt, setTtsPrompt] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [ttsBaseUrl, setTtsBaseUrl] = useState("");
+  const [ttsApiKey, setTtsApiKey] = useState("");
+  const [ttsModel, setTtsModel] = useState("");
+  const [ttsRemoteVoice, setTtsRemoteVoice] = useState("");
 
   useEffect(() => {
     setModel(settings?.assistant_models?.[selectedProviderId] ?? "");
@@ -50,7 +118,17 @@ export const AssistantSettings: React.FC = () => {
 
   useEffect(() => {
     setTtsPrompt(settings?.assistant_tts_prompt ?? "");
-  }, [settings?.assistant_tts_prompt]);
+    setTtsBaseUrl(settings?.assistant_tts_base_url ?? "");
+    setTtsApiKey(settings?.assistant_tts_api_key ?? "");
+    setTtsModel(settings?.assistant_tts_model ?? "");
+    setTtsRemoteVoice(settings?.assistant_tts_remote_voice ?? "");
+  }, [
+    settings?.assistant_tts_prompt,
+    settings?.assistant_tts_base_url,
+    settings?.assistant_tts_api_key,
+    settings?.assistant_tts_model,
+    settings?.assistant_tts_remote_voice,
+  ]);
 
   const providerOptions = providers
     .filter((p) => p.id !== "apple_intelligence")
@@ -190,21 +268,192 @@ export const AssistantSettings: React.FC = () => {
           grouped={true}
         />
         <SettingContainer
-          title={t("settings.assistant.tts.voiceLabel")}
-          description={t("settings.assistant.tts.voiceDescription")}
+          title={t("settings.assistant.tts.engineLabel")}
+          description={t("settings.assistant.tts.engineDescription")}
           descriptionMode="tooltip"
           layout="horizontal"
           grouped={true}
         >
           <Dropdown
-            options={KOKORO_VOICES}
-            selectedValue={settings?.assistant_tts_voice ?? "af_heart"}
-            onSelect={(voice) =>
-              setAndRefresh(commands.setAssistantTtsVoice(voice))
+            options={[
+              {
+                value: "kokoro",
+                label: t("settings.assistant.tts.engines.kokoro"),
+              },
+              {
+                value: "openai",
+                label: t("settings.assistant.tts.engines.openai"),
+              },
+              {
+                value: "elevenlabs",
+                label: t("settings.assistant.tts.engines.elevenlabs"),
+              },
+            ]}
+            selectedValue={settings?.assistant_tts_engine ?? "kokoro"}
+            onSelect={(engine) =>
+              setAndRefresh(commands.setAssistantTtsEngine(engine))
             }
             disabled={!settings?.assistant_tts_enabled}
           />
         </SettingContainer>
+
+        {(settings?.assistant_tts_engine ?? "kokoro") === "kokoro" && (
+          <SettingContainer
+            title={t("settings.assistant.tts.voiceLabel")}
+            description={t("settings.assistant.tts.voiceDescription")}
+            descriptionMode="tooltip"
+            layout="horizontal"
+            grouped={true}
+          >
+            <Dropdown
+              options={KOKORO_VOICES}
+              selectedValue={settings?.assistant_tts_voice ?? "af_heart"}
+              onSelect={(voice) =>
+                setAndRefresh(commands.setAssistantTtsVoice(voice))
+              }
+              disabled={!settings?.assistant_tts_enabled}
+            />
+          </SettingContainer>
+        )}
+
+        {settings?.assistant_tts_engine === "openai" && (
+          <>
+            <SettingContainer
+              title={t("settings.assistant.tts.baseUrlLabel")}
+              description={t("settings.assistant.tts.baseUrlDescription")}
+              descriptionMode="tooltip"
+              layout="horizontal"
+              grouped={true}
+            >
+              <Input
+                type="text"
+                value={ttsBaseUrl}
+                onChange={(e) => setTtsBaseUrl(e.target.value)}
+                onBlur={() =>
+                  setAndRefresh(commands.setAssistantTtsBaseUrl(ttsBaseUrl))
+                }
+                placeholder="https://my-resource.openai.azure.com/openai/v1"
+                className="min-w-[360px]"
+              />
+            </SettingContainer>
+            <SettingContainer
+              title={t("settings.assistant.tts.apiKeyLabel")}
+              description={t("settings.assistant.tts.apiKeyDescription")}
+              descriptionMode="tooltip"
+              layout="horizontal"
+              grouped={true}
+            >
+              <Input
+                type="password"
+                value={ttsApiKey}
+                onChange={(e) => setTtsApiKey(e.target.value)}
+                onBlur={() =>
+                  setAndRefresh(commands.setAssistantTtsApiKey(ttsApiKey))
+                }
+                className="min-w-[300px]"
+              />
+            </SettingContainer>
+            <SettingContainer
+              title={t("settings.assistant.tts.modelLabel")}
+              description={t("settings.assistant.tts.modelDescription")}
+              descriptionMode="tooltip"
+              layout="horizontal"
+              grouped={true}
+            >
+              <Input
+                type="text"
+                value={ttsModel}
+                onChange={(e) => setTtsModel(e.target.value)}
+                onBlur={() =>
+                  setAndRefresh(commands.setAssistantTtsModel(ttsModel))
+                }
+                placeholder="gpt-4o-mini-tts"
+                className="min-w-[240px]"
+              />
+            </SettingContainer>
+            <SettingContainer
+              title={t("settings.assistant.tts.remoteVoiceLabel")}
+              description={t("settings.assistant.tts.remoteVoiceDescription")}
+              descriptionMode="tooltip"
+              layout="horizontal"
+              grouped={true}
+            >
+              <Input
+                type="text"
+                value={ttsRemoteVoice}
+                onChange={(e) => setTtsRemoteVoice(e.target.value)}
+                onBlur={() =>
+                  setAndRefresh(
+                    commands.setAssistantTtsRemoteVoice(ttsRemoteVoice),
+                  )
+                }
+                placeholder="alloy"
+                className="min-w-[240px]"
+              />
+            </SettingContainer>
+          </>
+        )}
+
+        {settings?.assistant_tts_engine === "elevenlabs" && (
+          <>
+            <SettingContainer
+              title={t("settings.assistant.tts.apiKeyLabel")}
+              description={t("settings.assistant.tts.apiKeyDescription")}
+              descriptionMode="tooltip"
+              layout="horizontal"
+              grouped={true}
+            >
+              <Input
+                type="password"
+                value={ttsApiKey}
+                onChange={(e) => setTtsApiKey(e.target.value)}
+                onBlur={() =>
+                  setAndRefresh(commands.setAssistantTtsApiKey(ttsApiKey))
+                }
+                className="min-w-[300px]"
+              />
+            </SettingContainer>
+            <SettingContainer
+              title={t("settings.assistant.tts.elevenVoiceLabel")}
+              description={t("settings.assistant.tts.elevenVoiceDescription")}
+              descriptionMode="tooltip"
+              layout="horizontal"
+              grouped={true}
+            >
+              <Input
+                type="text"
+                value={ttsRemoteVoice}
+                onChange={(e) => setTtsRemoteVoice(e.target.value)}
+                onBlur={() =>
+                  setAndRefresh(
+                    commands.setAssistantTtsRemoteVoice(ttsRemoteVoice),
+                  )
+                }
+                placeholder="JBFqnCBsd6RMkjVDRZzb"
+                className="min-w-[300px]"
+              />
+            </SettingContainer>
+            <SettingContainer
+              title={t("settings.assistant.tts.modelLabel")}
+              description={t("settings.assistant.tts.modelDescription")}
+              descriptionMode="tooltip"
+              layout="horizontal"
+              grouped={true}
+            >
+              <Input
+                type="text"
+                value={ttsModel}
+                onChange={(e) => setTtsModel(e.target.value)}
+                onBlur={() =>
+                  setAndRefresh(commands.setAssistantTtsModel(ttsModel))
+                }
+                placeholder="eleven_flash_v2_5"
+                className="min-w-[240px]"
+              />
+            </SettingContainer>
+          </>
+        )}
+
         <SettingContainer
           title={t("settings.assistant.tts.promptLabel")}
           description={t("settings.assistant.tts.promptDescription")}
@@ -224,6 +473,47 @@ export const AssistantSettings: React.FC = () => {
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.assistant.appearance.title")}>
+        <SettingContainer
+          title={t("settings.assistant.appearance.previewLabel")}
+          description={t("settings.assistant.appearance.previewDescription")}
+          descriptionMode="tooltip"
+          layout="stacked"
+          grouped={true}
+        >
+          <PanelPreview
+            accent={settings?.assistant_accent ?? "violet"}
+            fontSize={settings?.assistant_font_size ?? "medium"}
+            opacity={settings?.assistant_panel_opacity ?? 1}
+          />
+        </SettingContainer>
+        <SettingContainer
+          title={t("settings.assistant.appearance.sizeLabel")}
+          description={t("settings.assistant.appearance.sizeDescription")}
+          descriptionMode="tooltip"
+          layout="horizontal"
+          grouped={true}
+        >
+          <Dropdown
+            options={[
+              {
+                value: "compact",
+                label: t("settings.assistant.appearance.sizes.compact"),
+              },
+              {
+                value: "standard",
+                label: t("settings.assistant.appearance.sizes.standard"),
+              },
+              {
+                value: "large",
+                label: t("settings.assistant.appearance.sizes.large"),
+              },
+            ]}
+            selectedValue={settings?.assistant_panel_size ?? "standard"}
+            onSelect={(size) =>
+              setAndRefresh(commands.setAssistantPanelSize(size))
+            }
+          />
+        </SettingContainer>
         <SettingContainer
           title={t("settings.assistant.appearance.accentLabel")}
           description={t("settings.assistant.appearance.accentDescription")}
