@@ -9,10 +9,106 @@ use log::debug;
 use std::io::Cursor;
 use xcap::Monitor;
 
-/// Longest edge of the captured image sent to the model. Keeps token /
-/// payload cost reasonable while UI text stays readable.
-const MAX_DIMENSION: u32 = 1568;
-const JPEG_QUALITY: u8 = 82;
+/// Hard ceiling for the encoded JPEG. Azure's gateway truncates request
+/// bodies around ~230 KB of JSON, producing "Unterminated string ...
+/// image_url.url" 400s — so the base64 (bytes * 4/3) plus prompt/history
+/// must stay comfortably below that.
+const TARGET_BYTES: usize = 110 * 1024;
+
+/// (longest edge, jpeg quality) attempts, best first. The first encoding
+/// that fits TARGET_BYTES wins; the last is a guaranteed-small fallback.
+const ENCODE_LADDER: [(u32, u8); 5] = [
+    (1568, 78),
+    (1568, 62),
+    (1280, 65),
+    (1152, 58),
+    (1024, 50),
+];
+
+fn scaled(img: &DynamicImage, max_dim: u32) -> DynamicImage {
+    let (w, h) = (img.width(), img.height());
+    if w.max(h) <= max_dim {
+        return img.clone();
+    }
+    let scale = max_dim as f32 / w.max(h) as f32;
+    img.resize(
+        (w as f32 * scale) as u32,
+        (h as f32 * scale) as u32,
+        FilterType::Triangle,
+    )
+}
+
+fn encode_jpeg(img: &DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
+    let rgb = DynamicImage::ImageRgb8(img.to_rgb8());
+    let mut buf = Vec::new();
+    rgb.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
+        Cursor::new(&mut buf),
+        quality,
+    ))
+    .map_err(|e| format!("Failed to encode screenshot: {}", e))?;
+    Ok(buf)
+}
+
+/// Capture the active monitor and return a `data:image/jpeg;base64,...` URL,
+/// adaptively compressed to stay under provider request-size limits.
+pub fn capture_screen_data_url() -> Result<String, String> {
+    let start = std::time::Instant::now();
+
+    let monitor = pick_monitor()?;
+    let rgba = monitor
+        .capture_image()
+        .map_err(|e| format!("Screen capture failed: {}", e))?;
+
+    let img = DynamicImage::ImageRgba8(rgba);
+
+    let mut chosen: Option<(Vec<u8>, u32, u8)> = None;
+    for (max_dim, quality) in ENCODE_LADDER {
+        let buf = encode_jpeg(&scaled(&img, max_dim), quality)?;
+        let size = buf.len();
+        chosen = Some((buf, max_dim, quality));
+        if size <= TARGET_BYTES {
+            break;
+        }
+    }
+    let (buf, max_dim, quality) =
+        chosen.ok_or_else(|| "Screenshot encoding produced no output".to_string())?;
+
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
+    debug!(
+        "Captured screen -> {} KB jpeg ({}px q{}, {} KB base64) in {:?}",
+        buf.len() / 1024,
+        max_dim,
+        quality,
+        encoded.len() / 1024,
+        start.elapsed()
+    );
+
+    Ok(format!("data:image/jpeg;base64,{}", encoded))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capture_works_on_this_machine() {
+        let result = capture_screen_data_url();
+        match result {
+            Ok(url) => {
+                assert!(url.starts_with("data:image/jpeg;base64,"));
+                // Whole data URL must stay under the gateway truncation
+                // threshold (~230 KB) with generous headroom for history.
+                assert!(
+                    url.len() <= 160 * 1024,
+                    "data url too large: {} KB",
+                    url.len() / 1024
+                );
+                println!("capture OK: {} KB data url", url.len() / 1024);
+            }
+            Err(e) => panic!("capture failed: {}", e),
+        }
+    }
+}
 
 #[cfg(target_os = "windows")]
 fn cursor_position() -> Option<(i32, i32)> {
@@ -40,62 +136,4 @@ fn pick_monitor() -> Result<Monitor, String> {
         .into_iter()
         .next()
         .ok_or_else(|| "No monitors found".to_string())
-}
-
-/// Capture the active monitor and return a `data:image/jpeg;base64,...` URL.
-pub fn capture_screen_data_url() -> Result<String, String> {
-    let start = std::time::Instant::now();
-
-    let monitor = pick_monitor()?;
-    let rgba = monitor
-        .capture_image()
-        .map_err(|e| format!("Screen capture failed: {}", e))?;
-
-    let mut img = DynamicImage::ImageRgba8(rgba);
-    let (w, h) = (img.width(), img.height());
-    if w.max(h) > MAX_DIMENSION {
-        let scale = MAX_DIMENSION as f32 / w.max(h) as f32;
-        img = img.resize(
-            (w as f32 * scale) as u32,
-            (h as f32 * scale) as u32,
-            FilterType::Triangle,
-        );
-    }
-
-    // JPEG keeps the payload small; UI text survives fine at this quality.
-    let rgb = DynamicImage::ImageRgb8(img.to_rgb8());
-    let mut buf = Vec::new();
-    rgb.write_with_encoder(image::codecs::jpeg::JpegEncoder::new_with_quality(
-        Cursor::new(&mut buf),
-        JPEG_QUALITY,
-    ))
-    .map_err(|e| format!("Failed to encode screenshot: {}", e))?;
-
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
-    debug!(
-        "Captured screen {}x{} -> {} KB jpeg in {:?}",
-        rgb.width(),
-        rgb.height(),
-        buf.len() / 1024,
-        start.elapsed()
-    );
-
-    Ok(format!("data:image/jpeg;base64,{}", encoded))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn capture_works_on_this_machine() {
-        let result = capture_screen_data_url();
-        match result {
-            Ok(url) => {
-                assert!(url.starts_with("data:image/jpeg;base64,"));
-                println!("capture OK: {} KB data url", url.len() / 1024);
-            }
-            Err(e) => panic!("capture failed: {}", e),
-        }
-    }
 }
