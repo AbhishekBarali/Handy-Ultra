@@ -107,6 +107,10 @@ fn create_client(provider: &PostProcessProvider, api_key: &str) -> Result<reqwes
     let headers = build_headers(provider, api_key)?;
     reqwest::Client::builder()
         .default_headers(headers)
+        // HTTP/1.1 avoids h2 flow-control issues seen with some gateways
+        // (Azure) on large bodies, e.g. multi-hundred-KB image payloads
+        // arriving truncated ("Unterminated string" 400s).
+        .http1_only()
         .build()
         .map_err(|e| format!("Failed to build HTTP client: {}", e))
 }

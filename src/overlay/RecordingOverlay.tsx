@@ -17,6 +17,7 @@ const RecordingOverlay: React.FC = () => {
   const { t } = useTranslation();
   const [isVisible, setIsVisible] = useState(false);
   const [state, setState] = useState<OverlayState>("recording");
+  const [locked, setLocked] = useState(false);
   const [levels, setLevels] = useState<number[]>(Array(16).fill(0));
   const smoothedLevelsRef = useRef<number[]>(Array(16).fill(0));
   const direction = getLanguageDirection(i18n.language);
@@ -29,12 +30,21 @@ const RecordingOverlay: React.FC = () => {
         await syncLanguageFromSettings();
         const overlayState = event.payload as OverlayState;
         setState(overlayState);
+        if (overlayState === "recording") {
+          setLocked(false);
+        }
         setIsVisible(true);
       });
 
       // Listen for hide-overlay event from Rust
       const unlistenHide = await listen("hide-overlay", () => {
         setIsVisible(false);
+        setLocked(false);
+      });
+
+      // Hands-free lock engaged (tap-to-lock)
+      const unlistenLocked = await listen<boolean>("recording-locked", (e) => {
+        setLocked(e.payload);
       });
 
       // Listen for mic-level updates
@@ -55,6 +65,7 @@ const RecordingOverlay: React.FC = () => {
       return () => {
         unlistenShow();
         unlistenHide();
+        unlistenLocked();
         unlistenLevel();
       };
     };
@@ -78,7 +89,10 @@ const RecordingOverlay: React.FC = () => {
       <div className="overlay-left">{getIcon()}</div>
 
       <div className="overlay-middle">
-        {state === "recording" && (
+        {state === "recording" && locked && (
+          <div className="locked-text">{t("overlay.locked")}</div>
+        )}
+        {state === "recording" && !locked && (
           <div className="bars-container">
             {levels.map((v, i) => (
               <div

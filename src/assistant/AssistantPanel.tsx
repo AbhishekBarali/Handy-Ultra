@@ -90,6 +90,7 @@ const AssistantPanel: React.FC = () => {
   const [input, setInput] = useState("");
   const [attachScreen, setAttachScreen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [locked, setLocked] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const sendingRef = useRef(false);
@@ -169,9 +170,18 @@ const AssistantPanel: React.FC = () => {
       track(
         await listen<{ state: AssistantState }>("assistant-state", (e) => {
           setState(e.payload.state);
+          if (e.payload.state !== "listening") {
+            setLocked(false);
+          }
           if (e.payload.state !== "idle") {
             setError(null);
           }
+        }),
+      );
+
+      track(
+        await listen<boolean>("recording-locked", (e) => {
+          setLocked(e.payload);
         }),
       );
 
@@ -279,7 +289,7 @@ const AssistantPanel: React.FC = () => {
 
   const ttsTitle =
     tts.status === "loading"
-      ? t("assistant.tts.loading")
+      ? t("assistant.tts.loadingShort", { progress: tts.progress })
       : ttsEnabled
         ? t("assistant.tts.disable")
         : t("assistant.tts.enable");
@@ -301,7 +311,11 @@ const AssistantPanel: React.FC = () => {
           {state === "listening" ? <Square size={16} /> : <Mic size={18} />}
         </button>
         <span className="pill-status" data-tauri-drag-region>
-          {busy ? t(`assistant.status.${state}`) : t("assistant.pill.idle")}
+          {tts.status === "loading"
+            ? t("assistant.tts.loadingShort", { progress: tts.progress })
+            : busy
+              ? t(`assistant.status.${state}`)
+              : t("assistant.pill.idle")}
         </span>
         <button
           className="assistant-icon-button"
@@ -402,7 +416,9 @@ const AssistantPanel: React.FC = () => {
         {(state === "listening" || state === "transcribing") && (
           <div className={`assistant-listening ${state}`}>
             <span className="listening-ring" />
-            {t(`assistant.status.${state}`)}
+            {state === "listening" && locked
+              ? t("assistant.status.locked")
+              : t(`assistant.status.${state}`)}
           </div>
         )}
         {showTypingDots && (

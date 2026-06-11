@@ -12,7 +12,7 @@ const DEBOUNCE: Duration = Duration::from_millis(30);
 /// Press shorter than this counts as a "tap" — with tap-to-lock enabled the
 /// recording keeps running hands-free until the hotkey is tapped again
 /// (Wispr Flow style). Longer presses behave as classic push-to-talk.
-const LOCK_TAP_MAX: Duration = Duration::from_millis(400);
+const LOCK_TAP_MAX: Duration = Duration::from_millis(500);
 
 /// Commands processed sequentially by the coordinator thread.
 enum Command {
@@ -110,6 +110,10 @@ impl TranscriptionCoordinator {
                                             .map_or(false, |t| t.elapsed() < LOCK_TAP_MAX)
                                     {
                                         locked = true;
+                                        // Tell overlays/panels to show the
+                                        // hands-free indicator.
+                                        use tauri::Emitter;
+                                        let _ = app.emit("recording-locked", true);
                                         debug!(
                                             "Tap-to-lock engaged for '{binding_id}'; tap again to stop"
                                         );

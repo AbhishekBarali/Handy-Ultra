@@ -60,6 +60,16 @@
   animation: transcribing-pulse 1.5s infinite ease-in-out;
 }
 
+.locked-text {
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  font-family:
+    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  animation: transcribing-pulse 1.5s infinite ease-in-out;
+}
+
 @keyframes transcribing-pulse {
   0%,
   100% {

@@ -711,7 +711,8 @@
   },
   "overlay": {
     "transcribing": "Transcribing...",
-    "processing": "Processing..."
+    "processing": "Processing...",
+    "locked": "Recording — tap hotkey to stop"
   },
   "assistant": {
     "title": "Assistant",
@@ -728,7 +729,8 @@
     "tts": {
       "enable": "Enable voice summaries",
       "disable": "Disable voice summaries",
-      "loading": "Loading Kokoro voice model..."
+      "loading": "Loading Kokoro voice model...",
+      "loadingShort": "Voice model {{progress}}%"
     },
     "pill": {
       "talk": "Click to talk",
@@ -739,6 +741,7 @@
     },
     "status": {
       "listening": "Listening...",
+      "locked": "Listening — tap hotkey to stop",
       "transcribing": "Transcribing...",
       "thinking": "Thinking..."
     }

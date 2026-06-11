@@ -18,6 +18,12 @@ interface TextSplitter {
 
 const KOKORO_MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 
+interface ProgressEvent {
+  status: string;
+  file?: string;
+  progress?: number;
+}
+
 function hasWebGpu(): boolean {
   return typeof navigator !== "undefined" && "gpu" in navigator;
 }
@@ -32,6 +38,8 @@ export function useKokoroTts(enabled: boolean, voice: string) {
   const modelRef = useRef<KokoroModel | null>(null);
   const loadingRef = useRef<Promise<KokoroModel> | null>(null);
   const [status, setStatus] = useState<TtsStatus>("off");
+  /** Model download progress 0-100 while status === "loading". */
+  const [progress, setProgress] = useState(0);
 
   // Playback queue state (refs: updated from async generators)
   const queueRef = useRef<Blob[]>([]);
@@ -42,21 +50,35 @@ export function useKokoroTts(enabled: boolean, voice: string) {
     if (modelRef.current) return modelRef.current;
     if (!loadingRef.current) {
       setStatus("loading");
+      setProgress(0);
       loadingRef.current = (async () => {
         const { KokoroTTS } = await import("kokoro-js");
         const useGpu = hasWebGpu();
+        // Track download progress of the (largest) onnx weights file.
+        const progress_callback = (event: ProgressEvent) => {
+          if (
+            event.status === "progress" &&
+            event.file?.endsWith(".onnx") &&
+            typeof event.progress === "number"
+          ) {
+            setProgress(Math.round(event.progress));
+          }
+        };
+        type LoadOptions = Parameters<typeof KokoroTTS.from_pretrained>[1];
         let model: unknown;
         try {
           model = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
             dtype: useGpu ? "fp32" : "q8",
             device: useGpu ? "webgpu" : "wasm",
-          });
+            progress_callback,
+          } as unknown as LoadOptions);
         } catch {
           // WebGPU init can fail (driver/feature limits); fall back to wasm.
           model = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
             dtype: "q8",
             device: "wasm",
-          });
+            progress_callback,
+          } as unknown as LoadOptions);
         }
         modelRef.current = model as KokoroModel;
         setStatus("ready");
@@ -145,5 +167,5 @@ export function useKokoroTts(enabled: boolean, voice: string) {
     [enabled, voice, ensureLoaded, stop, pump],
   );
 
-  return { status, speak, stop };
+  return { status, progress, speak, stop };
 }

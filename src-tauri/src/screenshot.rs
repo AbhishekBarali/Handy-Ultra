@@ -9,20 +9,23 @@ use log::debug;
 use std::io::Cursor;
 use xcap::Monitor;
 
-/// Hard ceiling for the encoded JPEG. Azure's gateway truncates request
-/// bodies around ~230 KB of JSON, producing "Unterminated string ...
-/// image_url.url" 400s — so the base64 (bytes * 4/3) plus prompt/history
-/// must stay comfortably below that.
-const TARGET_BYTES: usize = 110 * 1024;
+/// Hard ceiling for the **base64 data URL** (what actually lands in the
+/// JSON). Azure's request parser rejects bodies once a JSON string passes
+/// ~128 KiB ("Unterminated string ... image_url.url"), so the encoded form
+/// — raw JPEG × 4/3 — must stay clearly below that, with headroom for the
+/// prompt and history.
+const TARGET_ENCODED_BYTES: usize = 96 * 1024;
 
 /// (longest edge, jpeg quality) attempts, best first. The first encoding
-/// that fits TARGET_BYTES wins; the last is a guaranteed-small fallback.
-const ENCODE_LADDER: [(u32, u8); 5] = [
-    (1568, 78),
-    (1568, 62),
-    (1280, 65),
-    (1152, 58),
-    (1024, 50),
+/// whose base64 fits TARGET_ENCODED_BYTES wins; later rungs are
+/// guaranteed-small fallbacks.
+const ENCODE_LADDER: [(u32, u8); 6] = [
+    (1568, 70),
+    (1408, 62),
+    (1280, 56),
+    (1152, 50),
+    (1024, 45),
+    (896, 38),
 ];
 
 fn scaled(img: &DynamicImage, max_dim: u32) -> DynamicImage {
@@ -64,9 +67,10 @@ pub fn capture_screen_data_url() -> Result<String, String> {
     let mut chosen: Option<(Vec<u8>, u32, u8)> = None;
     for (max_dim, quality) in ENCODE_LADDER {
         let buf = encode_jpeg(&scaled(&img, max_dim), quality)?;
-        let size = buf.len();
+        // Budget the *encoded* size: base64 grows the payload by 4/3.
+        let encoded_size = buf.len().div_ceil(3) * 4;
         chosen = Some((buf, max_dim, quality));
-        if size <= TARGET_BYTES {
+        if encoded_size <= TARGET_ENCODED_BYTES {
             break;
         }
     }
@@ -96,10 +100,10 @@ mod tests {
         match result {
             Ok(url) => {
                 assert!(url.starts_with("data:image/jpeg;base64,"));
-                // Whole data URL must stay under the gateway truncation
-                // threshold (~230 KB) with generous headroom for history.
+                // The full data URL must stay under Azure's ~128 KiB JSON
+                // string cap with headroom for prompt + history.
                 assert!(
-                    url.len() <= 160 * 1024,
+                    url.len() <= 100 * 1024,
                     "data url too large: {} KB",
                     url.len() / 1024
                 );
