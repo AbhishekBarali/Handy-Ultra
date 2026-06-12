@@ -34,9 +34,14 @@ function hasWebGpu(): boolean {
  * and queued for gapless playback, so the first words play almost instantly
  * instead of waiting for the whole clip.
  */
-export function useKokoroTts(enabled: boolean, voice: string) {
+export function useKokoroTts(
+  enabled: boolean,
+  voice: string,
+  dtype: string = "fp32",
+) {
   const modelRef = useRef<KokoroModel | null>(null);
   const loadingRef = useRef<Promise<KokoroModel> | null>(null);
+  const dtypeRef = useRef(dtype);
   const [status, setStatus] = useState<TtsStatus>("off");
   /** Model download progress 0-100 while status === "loading". */
   const [progress, setProgress] = useState(0);
@@ -54,6 +59,7 @@ export function useKokoroTts(enabled: boolean, voice: string) {
       loadingRef.current = (async () => {
         const { KokoroTTS } = await import("kokoro-js");
         const useGpu = hasWebGpu();
+        const chosenDtype = dtypeRef.current;
         // Track download progress of the (largest) onnx weights file.
         const progress_callback = (event: ProgressEvent) => {
           if (
@@ -68,17 +74,35 @@ export function useKokoroTts(enabled: boolean, voice: string) {
         let model: unknown;
         try {
           model = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
-            dtype: useGpu ? "fp32" : "q8",
+            dtype: chosenDtype,
             device: useGpu ? "webgpu" : "wasm",
             progress_callback,
           } as unknown as LoadOptions);
-        } catch {
-          // WebGPU init can fail (driver/feature limits); fall back to wasm.
+          console.info(
+            `[Kokoro TTS] loaded on ${useGpu ? "webgpu" : "wasm/CPU"} (${chosenDtype})`,
+          );
+        } catch (gpuErr) {
+          // WebGPU init can fail (driver/feature limits). Fall back to wasm.
+          // fp32/fp16 are too heavy for CPU, so drop to q8 there.
+          const fallbackDtype =
+            chosenDtype === "fp32" || chosenDtype === "fp16"
+              ? "q8"
+              : chosenDtype;
+          if (useGpu) {
+            console.warn(
+              "[Kokoro TTS] WebGPU init failed — falling back to wasm/CPU, " +
+                "which is much slower. Synthesis will not use the GPU:",
+              gpuErr,
+            );
+          }
           model = await KokoroTTS.from_pretrained(KOKORO_MODEL_ID, {
-            dtype: "q8",
+            dtype: fallbackDtype,
             device: "wasm",
             progress_callback,
           } as unknown as LoadOptions);
+          console.info(
+            `[Kokoro TTS] loaded on wasm/CPU (${fallbackDtype}) fallback`,
+          );
         }
         modelRef.current = model as KokoroModel;
         setStatus("ready");
@@ -112,6 +136,20 @@ export function useKokoroTts(enabled: boolean, voice: string) {
     setStatus((s) => (s === "speaking" ? "ready" : s));
   }, []);
 
+  // When the dtype (precision) changes, drop the cached model so the next
+  // synthesis reloads at the new precision.
+  useEffect(() => {
+    if (dtypeRef.current === dtype) return;
+    dtypeRef.current = dtype;
+    stop();
+    modelRef.current = null;
+    loadingRef.current = null;
+    setStatus("off");
+    if (enabled) {
+      ensureLoaded().catch(() => {});
+    }
+  }, [dtype, enabled, ensureLoaded, stop]);
+
   /** Play queued blobs back-to-back; exits when queue drains. */
   const pump = useCallback((generation: number) => {
     if (generation !== generationRef.current) return;
@@ -134,8 +172,8 @@ export function useKokoroTts(enabled: boolean, voice: string) {
   }, []);
 
   const speak = useCallback(
-    async (text: string) => {
-      if (!enabled || !text.trim()) return;
+    async (text: string, force = false) => {
+      if ((!enabled && !force) || !text.trim()) return;
       try {
         const model = await ensureLoaded();
         stop();

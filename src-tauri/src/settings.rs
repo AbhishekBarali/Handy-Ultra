@@ -466,6 +466,8 @@ pub struct AppSettings {
     pub assistant_tts_model: String,
     #[serde(default = "default_assistant_tts_remote_voice")]
     pub assistant_tts_remote_voice: String,
+    #[serde(default = "default_assistant_tts_kokoro_dtype")]
+    pub assistant_tts_kokoro_dtype: String,
     #[serde(default = "default_assistant_tts_prompt")]
     pub assistant_tts_prompt: String,
     #[serde(default = "default_assistant_panel_opacity")]
@@ -744,6 +746,12 @@ fn default_assistant_tts_remote_voice() -> String {
     "alloy".to_string()
 }
 
+fn default_assistant_tts_kokoro_dtype() -> String {
+    // fp32 is recommended for WebGPU; users on weak/no GPU can pick a
+    // quantized dtype (q8/q4/q4f16) for much faster CPU/WASM synthesis.
+    "fp32".to_string()
+}
+
 fn default_assistant_panel_size() -> String {
     "standard".to_string()
 }
@@ -786,7 +794,7 @@ fn ensure_assistant_defaults(settings: &mut AppSettings) -> bool {
     }
     if !matches!(
         settings.assistant_tts_engine.as_str(),
-        "kokoro" | "openai" | "elevenlabs"
+        "kokoro" | "openai" | "elevenlabs" | "azure"
     ) {
         settings.assistant_tts_engine = default_assistant_tts_engine();
         changed = true;
@@ -801,6 +809,13 @@ fn ensure_assistant_defaults(settings: &mut AppSettings) -> bool {
     }
     if settings.assistant_tts_remote_voice.trim().is_empty() {
         settings.assistant_tts_remote_voice = default_assistant_tts_remote_voice();
+        changed = true;
+    }
+    if !matches!(
+        settings.assistant_tts_kokoro_dtype.as_str(),
+        "fp32" | "fp16" | "q8" | "q4" | "q4f16"
+    ) {
+        settings.assistant_tts_kokoro_dtype = default_assistant_tts_kokoro_dtype();
         changed = true;
     }
     if !matches!(
@@ -1073,6 +1088,7 @@ pub fn get_default_settings() -> AppSettings {
         assistant_tts_api_key: SecretString::default(),
         assistant_tts_model: default_assistant_tts_model(),
         assistant_tts_remote_voice: default_assistant_tts_remote_voice(),
+        assistant_tts_kokoro_dtype: default_assistant_tts_kokoro_dtype(),
         assistant_tts_prompt: default_assistant_tts_prompt(),
         assistant_panel_opacity: default_assistant_panel_opacity(),
         assistant_font_size: default_assistant_font_size(),

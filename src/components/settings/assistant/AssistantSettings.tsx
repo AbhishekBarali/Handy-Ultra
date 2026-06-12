@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { commands } from "@/bindings";
+import { RefreshCw, Volume2 } from "lucide-react";
+import { commands, type AzureVoice } from "@/bindings";
 import {
   Dropdown,
   SettingContainer,
@@ -12,6 +13,15 @@ import {
 import { Input } from "../../ui/Input";
 import { ShortcutInput } from "../ShortcutInput";
 import { useSettings } from "../../../hooks/useSettings";
+import { useKokoroTts } from "../../../assistant/useKokoroTts";
+
+const KOKORO_DTYPES = [
+  { value: "fp32", label: "fp32 (best quality, WebGPU)" },
+  { value: "fp16", label: "fp16 (half precision)" },
+  { value: "q8", label: "q8 (8-bit, fast on CPU)" },
+  { value: "q4", label: "q4 (4-bit, fastest)" },
+  { value: "q4f16", label: "q4f16 (4-bit mixed)" },
+];
 
 const KOKORO_VOICES = [
   { value: "af_heart", label: "Heart (US female)" },
@@ -105,6 +115,66 @@ export const AssistantSettings: React.FC = () => {
   const [ttsApiKey, setTtsApiKey] = useState("");
   const [ttsModel, setTtsModel] = useState("");
   const [ttsRemoteVoice, setTtsRemoteVoice] = useState("");
+
+  // TTS test button state (shared across engines).
+  const [testState, setTestState] = useState<
+    "idle" | "testing" | "ok" | "error"
+  >("idle");
+  const [testError, setTestError] = useState<string | null>(null);
+
+  // Azure voice list state (loaded on demand from the endpoint + key).
+  const [azureVoices, setAzureVoices] = useState<AzureVoice[]>([]);
+  const [voicesLoading, setVoicesLoading] = useState(false);
+  const [voicesError, setVoicesError] = useState<string | null>(null);
+
+  const loadAzureVoices = async () => {
+    setVoicesLoading(true);
+    setVoicesError(null);
+    try {
+      const res = await commands.assistantListAzureVoices();
+      if (res.status === "error") {
+        setVoicesError(res.error);
+        setAzureVoices([]);
+        return;
+      }
+      setAzureVoices(res.data);
+    } catch (e) {
+      setVoicesError(String(e));
+      setAzureVoices([]);
+    } finally {
+      setVoicesLoading(false);
+    }
+  };
+
+  const ttsEngine = settings?.assistant_tts_engine ?? "kokoro";
+  const ttsVoice = settings?.assistant_tts_voice ?? "af_heart";
+  const ttsDtype = settings?.assistant_tts_kokoro_dtype ?? "fp32";
+  // Lazy (not preloaded) Kokoro instance used only by the Test button in this
+  // settings window; force-speaks regardless of the enabled toggle.
+  const kokoroTest = useKokoroTts(false, ttsVoice, ttsDtype);
+
+  const handleTestTts = async () => {
+    setTestState("testing");
+    setTestError(null);
+    const phrase = t("settings.assistant.tts.testPhrase");
+    try {
+      if (ttsEngine === "kokoro") {
+        await kokoroTest.speak(phrase, true);
+      } else {
+        const res = await commands.assistantTestTts();
+        if (res.status === "error") {
+          setTestState("error");
+          setTestError(res.error);
+          return;
+        }
+      }
+      setTestState("ok");
+      setTimeout(() => setTestState("idle"), 2000);
+    } catch (e) {
+      setTestState("error");
+      setTestError(String(e));
+    }
+  };
 
   useEffect(() => {
     setModel(settings?.assistant_models?.[selectedProviderId] ?? "");
@@ -288,6 +358,10 @@ export const AssistantSettings: React.FC = () => {
                 value: "elevenlabs",
                 label: t("settings.assistant.tts.engines.elevenlabs"),
               },
+              {
+                value: "azure",
+                label: t("settings.assistant.tts.engines.azure"),
+              },
             ]}
             selectedValue={settings?.assistant_tts_engine ?? "kokoro"}
             onSelect={(engine) =>
@@ -298,22 +372,40 @@ export const AssistantSettings: React.FC = () => {
         </SettingContainer>
 
         {(settings?.assistant_tts_engine ?? "kokoro") === "kokoro" && (
-          <SettingContainer
-            title={t("settings.assistant.tts.voiceLabel")}
-            description={t("settings.assistant.tts.voiceDescription")}
-            descriptionMode="tooltip"
-            layout="horizontal"
-            grouped={true}
-          >
-            <Dropdown
-              options={KOKORO_VOICES}
-              selectedValue={settings?.assistant_tts_voice ?? "af_heart"}
-              onSelect={(voice) =>
-                setAndRefresh(commands.setAssistantTtsVoice(voice))
-              }
-              disabled={!settings?.assistant_tts_enabled}
-            />
-          </SettingContainer>
+          <>
+            <SettingContainer
+              title={t("settings.assistant.tts.voiceLabel")}
+              description={t("settings.assistant.tts.voiceDescription")}
+              descriptionMode="tooltip"
+              layout="horizontal"
+              grouped={true}
+            >
+              <Dropdown
+                options={KOKORO_VOICES}
+                selectedValue={settings?.assistant_tts_voice ?? "af_heart"}
+                onSelect={(voice) =>
+                  setAndRefresh(commands.setAssistantTtsVoice(voice))
+                }
+                disabled={!settings?.assistant_tts_enabled}
+              />
+            </SettingContainer>
+            <SettingContainer
+              title={t("settings.assistant.tts.dtypeLabel")}
+              description={t("settings.assistant.tts.dtypeDescription")}
+              descriptionMode="tooltip"
+              layout="horizontal"
+              grouped={true}
+            >
+              <Dropdown
+                options={KOKORO_DTYPES}
+                selectedValue={settings?.assistant_tts_kokoro_dtype ?? "fp32"}
+                onSelect={(dtype) =>
+                  setAndRefresh(commands.setAssistantTtsKokoroDtype(dtype))
+                }
+                disabled={!settings?.assistant_tts_enabled}
+              />
+            </SettingContainer>
+          </>
         )}
 
         {settings?.assistant_tts_engine === "openai" && (
@@ -332,7 +424,7 @@ export const AssistantSettings: React.FC = () => {
                 onBlur={() =>
                   setAndRefresh(commands.setAssistantTtsBaseUrl(ttsBaseUrl))
                 }
-                placeholder="https://my-resource.openai.azure.com/openai/v1"
+                placeholder="https://my-resource.openai.azure.com/openai/v1/audio/speech?api-version=2025-03-01-preview"
                 className="min-w-[360px]"
               />
             </SettingContainer>
@@ -453,6 +545,137 @@ export const AssistantSettings: React.FC = () => {
             </SettingContainer>
           </>
         )}
+
+        {settings?.assistant_tts_engine === "azure" && (
+          <>
+            <SettingContainer
+              title={t("settings.assistant.tts.azureBaseUrlLabel")}
+              description={t("settings.assistant.tts.azureBaseUrlDescription")}
+              descriptionMode="tooltip"
+              layout="horizontal"
+              grouped={true}
+            >
+              <Input
+                type="text"
+                value={ttsBaseUrl}
+                onChange={(e) => setTtsBaseUrl(e.target.value)}
+                onBlur={() =>
+                  setAndRefresh(commands.setAssistantTtsBaseUrl(ttsBaseUrl))
+                }
+                placeholder="https://eastus2.tts.speech.microsoft.com"
+                className="min-w-[360px]"
+              />
+            </SettingContainer>
+            <SettingContainer
+              title={t("settings.assistant.tts.apiKeyLabel")}
+              description={t("settings.assistant.tts.apiKeyDescription")}
+              descriptionMode="tooltip"
+              layout="horizontal"
+              grouped={true}
+            >
+              <Input
+                type="password"
+                value={ttsApiKey}
+                onChange={(e) => setTtsApiKey(e.target.value)}
+                onBlur={() =>
+                  setAndRefresh(commands.setAssistantTtsApiKey(ttsApiKey))
+                }
+                className="min-w-[300px]"
+              />
+            </SettingContainer>
+            <SettingContainer
+              title={t("settings.assistant.tts.azureVoiceLabel")}
+              description={t("settings.assistant.tts.azureVoiceDescription")}
+              descriptionMode="tooltip"
+              layout="horizontal"
+              grouped={true}
+            >
+              <div className="flex flex-col items-end gap-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    type="text"
+                    value={ttsRemoteVoice}
+                    onChange={(e) => setTtsRemoteVoice(e.target.value)}
+                    onBlur={() =>
+                      setAndRefresh(
+                        commands.setAssistantTtsRemoteVoice(ttsRemoteVoice),
+                      )
+                    }
+                    placeholder="en-US-JennyNeural"
+                    className="min-w-[220px]"
+                  />
+                  <button
+                    type="button"
+                    onClick={loadAzureVoices}
+                    disabled={voicesLoading}
+                    className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-mid-gray/30 hover:bg-mid-gray/10 disabled:opacity-50 disabled:cursor-not-allowed text-sm whitespace-nowrap"
+                  >
+                    <RefreshCw
+                      size={14}
+                      className={voicesLoading ? "animate-spin" : ""}
+                    />
+                    {voicesLoading
+                      ? t("settings.assistant.tts.voicesLoading")
+                      : t("settings.assistant.tts.loadVoices")}
+                  </button>
+                </div>
+                {azureVoices.length > 0 && (
+                  <Dropdown
+                    options={azureVoices.map((v) => ({
+                      value: v.short_name,
+                      label: `${v.short_name} · ${v.locale} ${v.gender}`,
+                    }))}
+                    selectedValue={ttsRemoteVoice}
+                    onSelect={(v) => {
+                      setTtsRemoteVoice(v);
+                      setAndRefresh(commands.setAssistantTtsRemoteVoice(v));
+                    }}
+                    placeholder={t("settings.assistant.tts.voicesPick", {
+                      count: azureVoices.length,
+                    })}
+                    className="min-w-[300px]"
+                  />
+                )}
+                {voicesError && (
+                  <span className="text-xs text-red-500 max-w-[360px] text-right break-words">
+                    {voicesError}
+                  </span>
+                )}
+              </div>
+            </SettingContainer>
+          </>
+        )}
+
+        <SettingContainer
+          title={t("settings.assistant.tts.testLabel")}
+          description={t("settings.assistant.tts.testDescription")}
+          descriptionMode="tooltip"
+          layout="horizontal"
+          grouped={true}
+        >
+          <div className="flex flex-col items-end gap-1">
+            <button
+              type="button"
+              onClick={handleTestTts}
+              disabled={
+                !settings?.assistant_tts_enabled || testState === "testing"
+              }
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-mid-gray/30 hover:bg-mid-gray/10 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+            >
+              <Volume2 size={14} />
+              {testState === "testing"
+                ? t("settings.assistant.tts.testing")
+                : testState === "ok"
+                  ? t("settings.assistant.tts.testOk")
+                  : t("settings.assistant.tts.testButton")}
+            </button>
+            {testState === "error" && testError && (
+              <span className="text-xs text-red-500 max-w-[360px] text-right break-words">
+                {testError}
+              </span>
+            )}
+          </div>
+        </SettingContainer>
 
         <SettingContainer
           title={t("settings.assistant.tts.promptLabel")}

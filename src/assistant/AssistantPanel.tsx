@@ -97,8 +97,9 @@ const AssistantPanel: React.FC = () => {
 
   const ttsEnabled = settings?.assistant_tts_enabled ?? false;
   const ttsVoice = settings?.assistant_tts_voice ?? "af_heart";
+  const ttsDtype = settings?.assistant_tts_kokoro_dtype ?? "fp32";
   const screenshotEnabled = settings?.assistant_screenshot_enabled ?? true;
-  const tts = useKokoroTts(ttsEnabled, ttsVoice);
+  const tts = useKokoroTts(ttsEnabled, ttsVoice, ttsDtype);
   const speakRef = useRef(tts.speak);
   speakRef.current = tts.speak;
 

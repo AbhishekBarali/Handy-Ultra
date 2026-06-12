@@ -463,11 +463,14 @@ pub fn run(cli_args: CliArgs) {
             commands::assistant::set_assistant_tts_api_key,
             commands::assistant::set_assistant_tts_model,
             commands::assistant::set_assistant_tts_remote_voice,
+            commands::assistant::set_assistant_tts_kokoro_dtype,
             commands::assistant::set_assistant_panel_size,
             commands::assistant::set_assistant_panel_collapsed,
             commands::assistant::set_assistant_screen_armed,
             commands::assistant::assistant_toggle_voice,
             commands::assistant::assistant_speak,
+            commands::assistant::assistant_test_tts,
+            commands::assistant::assistant_list_azure_voices,
             helpers::clamshell::is_laptop,
         ])
         .events(collect_events![managers::history::HistoryUpdatePayload,]);

@@ -511,6 +511,10 @@ fn spawn_tts_summary(
     let settings = settings.clone();
 
     tauri::async_runtime::spawn(async move {
+        // Capture the playback epoch up front: if the user disables voice
+        // summaries while this summary is still generating, the epoch bumps and
+        // playback is suppressed.
+        let epoch = crate::tts::current_epoch();
         match llm_client::send_chat_completion_with_schema(
             &provider,
             api_key,
@@ -530,10 +534,11 @@ fn spawn_tts_summary(
                     settings.assistant_tts_engine, summary
                 );
                 if settings.assistant_tts_engine == "kokoro" {
-                    // Local engine lives in the panel webview (kokoro-js).
+                    // Local engine lives in the panel webview (kokoro-js); the
+                    // webview hook ignores it when TTS is disabled.
                     let _ = app.emit("assistant-tts", summary);
                 } else {
-                    crate::tts::speak_remote(&app, &settings, summary).await;
+                    crate::tts::speak_remote_epoch(&app, &settings, summary, epoch).await;
                 }
             }
             Ok(_) => debug!("TTS summary request returned no content"),

@@ -138,6 +138,11 @@ pub fn set_assistant_screenshot_enabled(app: AppHandle, enabled: bool) -> Result
 #[tauri::command]
 #[specta::specta]
 pub fn set_assistant_tts_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    // Disabling should silence whatever is playing or being generated right
+    // now, not just suppress future summaries.
+    if !enabled {
+        crate::tts::stop_remote();
+    }
     let mut settings = get_settings(&app);
     settings.assistant_tts_enabled = enabled;
     write_settings(&app, settings);
@@ -201,9 +206,11 @@ pub fn set_assistant_accent(app: AppHandle, accent: String) -> Result<(), String
 #[tauri::command]
 #[specta::specta]
 pub fn set_assistant_tts_engine(app: AppHandle, engine: String) -> Result<(), String> {
-    if !matches!(engine.as_str(), "kokoro" | "openai" | "elevenlabs") {
+    if !matches!(engine.as_str(), "kokoro" | "openai" | "elevenlabs" | "azure") {
         return Err(format!("Unknown TTS engine: {}", engine));
     }
+    // Switching engine mid-playback should stop the current clip.
+    crate::tts::stop_remote();
     let mut settings = get_settings(&app);
     settings.assistant_tts_engine = engine;
     write_settings(&app, settings);
@@ -246,6 +253,19 @@ pub fn set_assistant_tts_model(app: AppHandle, model: String) -> Result<(), Stri
 pub fn set_assistant_tts_remote_voice(app: AppHandle, voice: String) -> Result<(), String> {
     let mut settings = get_settings(&app);
     settings.assistant_tts_remote_voice = voice;
+    write_settings(&app, settings);
+    emit_settings_changed(&app);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn set_assistant_tts_kokoro_dtype(app: AppHandle, dtype: String) -> Result<(), String> {
+    if !matches!(dtype.as_str(), "fp32" | "fp16" | "q8" | "q4" | "q4f16") {
+        return Err(format!("Unknown Kokoro dtype: {}", dtype));
+    }
+    let mut settings = get_settings(&app);
+    settings.assistant_tts_kokoro_dtype = dtype;
     write_settings(&app, settings);
     emit_settings_changed(&app);
     Ok(())
@@ -306,4 +326,31 @@ pub async fn assistant_speak(app: AppHandle, text: String) -> Result<(), String>
         crate::tts::speak_remote(&app, &settings, text).await;
     }
     Ok(())
+}
+
+/// Synthesize and play a short sample with the configured remote TTS engine,
+/// returning any error so the settings "Test voice" button can show it inline.
+/// (The local kokoro engine is tested in-webview, not through this command.)
+#[tauri::command]
+#[specta::specta]
+pub async fn assistant_test_tts(app: AppHandle) -> Result<(), String> {
+    let settings = get_settings(&app);
+    if settings.assistant_tts_engine == "kokoro" {
+        return Err("Kokoro is tested locally in the browser, not via this command".to_string());
+    }
+    // Interrupt anything currently playing before the test clip.
+    crate::tts::stop_remote();
+    let sample = "Hi! This is a test of Handy's voice output.".to_string();
+    crate::tts::test_remote(&settings, sample).await
+}
+
+/// Fetch all available Azure Speech neural voices for the configured endpoint
+/// and key, so the settings UI can offer a voice picker instead of guessing.
+#[tauri::command]
+#[specta::specta]
+pub async fn assistant_list_azure_voices(
+    app: AppHandle,
+) -> Result<Vec<crate::tts::AzureVoice>, String> {
+    let settings = get_settings(&app);
+    crate::tts::list_azure_voices(&settings).await
 }
